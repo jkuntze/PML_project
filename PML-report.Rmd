@@ -1,0 +1,162 @@
+---
+title: "Predicting how weight lifting is performed"
+author: "JKuntze"
+date: "October 25, 2014"
+output: html_document
+---
+<br>
+<br>
+
+## Abstract
+Random Forest models were built to predict the manner in which six different people performed weight lifting. Cross-validated prediction performance of various models with sequentially reduced number of predictors was evaluated, and the importance of the predictors was determined. The final model results from the combination of those findings. The expected out of sample error rate is below 1%.
+<br>
+<br>
+
+## Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+<br>
+<br>
+
+## Prediction Model
+The Random Forests classification method was chosen due to its ability to tackle non linear problems and its high performance.
+The model was built by using cross validation to determine how many predictors would be required to produce accurate predictions, avoiding overfitting at the same time.  
+<br>
+
+### Data cleaning
+After evaluating the training data set (pml-training.csv), 106 out of 159 variables were removed from the analysis data set, because they did not contain useful information (examples are user name, timestamp, and variables listing mainly NA and "" values).
+
+```{r loaddata, echo=FALSE, cache=TRUE}
+require(caret)
+require(randomForest)
+
+# read data
+files<-list.files()
+url1<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url2<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if (sum(grepl("pml-training.csv",files))==0) {
+    download.file(url1,"pml-training.csv",method="curl")  
+    print("download url1")
+}
+
+if (sum(grepl("pml-testing.csv",files))==0) {
+    download.file(url2,"pml-testing.csv",method="curl") 
+    print("download url2")
+}
+files<-list.files()
+
+pmltrain<-read.csv("pml-training.csv")
+
+# clean data
+
+# many variables loaded as factors contain mainly "" values. They will be removed
+# from the dataset
+pmltrainclass<-NULL
+for (i in 1:dim(pmltrain)[2]) {
+    pmltrainclass<-c(pmltrainclass,class(pmltrain[,i]))
+}
+trainfactor<-grep("factor",pmltrainclass)
+
+factorvariables<-pmltrain[,trainfactor]
+fvtable<-apply(factorvariables,2,table)
+
+# variables to be removed from dataset - leave classe variable (last element)
+# in trainfactor
+varrem<-trainfactor[1:36]
+
+# some variables that contain little data, mainly NA values. These will be removed
+# as well
+findNA<-sapply(pmltrain,function(x) sum(is.na(x)))
+varrem<-c(varrem,which(findNA!=0))
+
+# Description variables will be removed too
+descr<-c(1:7)
+varrem<-c(varrem,descr)
+varrem<-unique(varrem)
+
+train0<-pmltrain[,-varrem]
+```
+
+### Cross validation and data slicing
+As Dan Steinberg states in his article entitled "Random Forests OOB vs. Test Partition Performance", "Random Forests is the unique learning machine that has no need of an explicit test sample because of its use of bootstrap sampling for every tree. This ensures that every tree in the forest is built on about 63% of the available data, leaving the remaining approximately 37% for testing [the OOB (out-of-bag) data]." He concludes that "OOB results will be pessimistic - but typically only mildly so" when compared to test sample error estimates.
+<br>
+<br>
+Nevertheless, since `r dim(train0)[1]` observations are available in the training data set, for learning purposes the data will be sliced according to the following distribution: training 60%, testing 20%, validation 20%.
+ 
+```{r cv, echo=FALSE, cache=TRUE}
+#Data sppliting for cross validation
+#since many observations are available, the data will be sliced as according to the following distribution: training 60%,testing 20%,validation 20%
+
+inTrainTest <- createDataPartition(y=train0$classe,p=0.8, list=FALSE)
+traintest <- train0[inTrainTest,]
+validation <- train0[-inTrainTest,]
+
+inTrain <- createDataPartition(y=traintest$classe,p=0.75, list=FALSE)
+train <- traintest[inTrain,]
+test <- traintest[-inTrain,]
+```
+In order to avoid overfitting, cross-validated prediction performance of models with sequentially reduced number of predictors (ranked by variable importance) was evaluated. The figure below shows the estimated error of models built upon various numbers of predictors. 
+
+```{r rfcv, echo=FALSE, fig.width = 4, fig.height = 4, fig.cap="Error rate for various numbers of variables used", cache=TRUE}
+# k-fold cross validation - evaluate how many variables are required 
+cv<-rfcv(train[,-53],train[,53])
+with(cv, plot(n.var, error.cv, log="x", type="o", lwd=2))
+```
+<br>
+
+### Model fitting
+```{r modelall, echo=FALSE, cache=TRUE}
+# fit Random Forest model - Accuracy : 0.9929 - all variables
+
+modFit0<-randomForest(classe~.,data=train)
+modFit0.cm<-confusionMatrix(test$classe,predict(modFit0,test))
+```
+The next step was to determine the importance of the predictors. The list below shows the 53 predictors that were retained after cleaning the data, ordered by decreasing importance (most important on top).
+<br> 
+```{r importance, echo=FALSE, cache=TRUE}
+important<-row.names(importance(modFit0))[order(importance(modFit0),decreasing =T)]
+important
+```
+<br> 
+The final model was produced using the 26 most important predictors. The model summary is presented below.
+<br> 
+```{r model26, echo=FALSE, cache=TRUE}
+# Model to be used for validation - Accuracy : 0.9921 
+n<-26
+important<-important[1:n]
+variables<-NULL
+for(i in important) {
+    variables<-paste(variables,i,sep="+")
+}
+formula<-as.formula(paste0("classe~",substring(variables,2)))
+
+modFit1<-randomForest(formula,data=train)
+modFit1
+```
+<br>
+The confusion matrix produced using the validation data set can be found below.
+<br>
+```{r cm, echo=FALSE, cache=TRUE}
+modFit1.cm<-confusionMatrix(validation$classe,predict(modFit1,validation))
+modFit1.cm
+```
+<br> 
+
+### Expected out of sample error
+The OOB (out-of-bag) estimate of error rate is shown in the summary of the model above.
+<br>
+The estimated validation sample error rate - (1-Accuracy)x100% - is `r round((1- modFit1.cm$overall["Accuracy"])*100,2)`% 
+<br> 
+<br>
+
+## Conclusion
+A model using random forests was built in order to predict the manner in which different people performed weight lifting exercises. Cross validation was used to select predictors, and the out of sample error was estimated. 
+<br>
+The model predicted correctly the 20 different test cases required to complete the course project.
+<br> 
+<br>
+
+## References
+* Practical Machine Learning by Jeff Leek, PhD, Roger D. Peng, PhD, Brian Caffo, PhD - Coursera
+* Random Forest Cross-Valdidation for feature selection - R Documentation
+* Random Forests OOB vs. Test Partition Performance by Dan Steinberg
